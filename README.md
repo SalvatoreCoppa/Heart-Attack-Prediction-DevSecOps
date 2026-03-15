@@ -27,16 +27,40 @@ The infrastructure was built with a strong focus on **High Availability** and **
 * **Cloud & DevOps:** Kubernetes, Docker, Nginx Reverse Proxy
 * **Software:** Python, Flask (API), Streamlit (Frontend), Scikit-Learn (AI Model)
 * **Database:** PostgreSQL (Master-Slave, pgcrypto)
-* **Security Testing:** Docker Scout, Gitleaks, Semgrep, OWASP ZAP (wrk for Load Testing)
+* **Security Testing:** Docker Scout, Gitleaks, Semgrep, OWASP ZAP
 
-## 🚀 Deployment
-*(Note: Ensure you have a running Kubernetes cluster and `kubectl` configured).*
-1. Clone the repository:
+## 🚀 How to Run and Deploy
+
+The AI model is pre-trained and directly integrated into the system. You can spin up the entire infrastructure using either Docker Compose or a local Kubernetes cluster (KIND).
+
+### Option 1: Local Environment (Docker Compose)
+The fastest way to test the microservices (`auth`, `backend`, `frontend`, `report_service`) locally:
+
+1. Clone the repository and navigate into it:
    ```bash
    git clone https://github.com/YourUsername/Heart-Attack-Prediction-DevSecOps.git
-2. Apply the Kubernetes manifests (Deployments, Services, HPA, Secrets):
+   cd Heart-Attack-Prediction-DevSecOps
+   ```
+2. Build and start the infrastructure:
    ```bash
-   kubectl apply -f k8s/
-3. Access the Streamlit frontend via the Nginx Ingress Controller IP.
+   docker-compose up --build
+   ```
 
-Project developed for the Secure Cloud Computing course, A.Y. 2025/2026.
+### Option 2: Local Kubernetes Cluster (KIND)
+To test the Kubernetes orchestration, High Availability, and HPA logic locally:
+
+1. Create the local cluster using the provided configuration:
+   ```bash
+   ./kind.exe create cluster --config kind-config.yaml
+   ```
+2. Deploy the Metrics Server (required for HPA to work):
+   ```bash
+   kubectl apply -f metrics-server.yaml
+   ```
+3. Apply the application manifests, HPA, and Role Bindings:
+   ```bash
+   kubectl apply -f k8s-deploy.yaml
+   kubectl apply -f hpa.yaml
+   kubectl apply -f cluster_rolebinding.yaml
+   kubectl apply -f dashboard-adminuser.yaml
+   ```
