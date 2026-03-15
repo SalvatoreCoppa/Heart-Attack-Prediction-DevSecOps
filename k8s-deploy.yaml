@@ -1,0 +1,442 @@
+# --- NGINX (Load Balancer / Ingresso) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-proxy
+spec:
+  type: NodePort
+  ports:
+  - name: https       
+    port: 443
+    targetPort: 443
+    nodePort: 30443
+  - name: http       
+    port: 80
+    targetPort: 80
+    nodePort: 30080
+  selector:
+    app: nginx-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-proxy
+  template:
+    metadata:
+      labels:
+        app: nginx-proxy
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nginx-proxy
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: nginx
+        image: sasa2002/medical-nginx:v9
+        ports:
+        - containerPort: 443
+        - containerPort: 80
+        volumeMounts:
+        - name: certs-vol
+          mountPath: /etc/nginx/certs
+          readOnly: true
+      volumes:
+      - name: certs-vol
+        secret:
+          secretName: nginx-certs
+
+---
+# --- FRONTEND ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: NodePort
+  ports:
+  - port: 8501
+    targetPort: 8501
+    nodePort: 30501
+  selector:
+    app: frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - frontend
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: frontend
+        image: sasa2002/medical-frontend:v7
+        ports:
+        - containerPort: 8501
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+          limits:
+            cpu: "2000m"
+            memory: "1Gi"
+        env:
+        - name: AUTH_URL
+          value: "http://auth-service:5001"
+        - name: BACKEND_URL
+          value: "http://ml-service:5000"
+        - name: REPORT_URL
+          value: "http://report-service:5002"
+
+---
+# --- DB PRIMARY ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-primary
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: db-primary
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-primary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-primary
+  template:
+    metadata:
+      labels:
+        app: db-primary
+    spec:
+      containers:
+      - name: postgres
+        image: bitnami/postgresql:latest
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: POSTGRESQL_REPLICATION_MODE
+          value: "master"
+        - name: POSTGRESQL_REPLICATION_USER
+          value: "repl_user"
+        - name: POSTGRESQL_REPLICATION_PASSWORD
+          value: "repl_password"
+        - name: POSTGRESQL_USERNAME
+          value: "postgres"
+        - name: POSTGRESQL_DATABASE
+          value: "medical_db"
+        - name: ALLOW_EMPTY_PASSWORD
+          value: "yes"
+        - name: POSTGRESQL_PASSWORD_FILE
+          value: "/run/secrets/db_password"
+        volumeMounts:
+        - name: db-data
+          mountPath: /bitnami/postgresql
+        - name: secrets-vol
+          mountPath: "/run/secrets/db_password"
+          subPath: db_password.txt  
+      volumes:
+      - name: db-data
+        hostPath:
+          path: /shared-data/primary
+          type: DirectoryOrCreate
+      - name: secrets-vol
+        secret:
+          secretName: medical-secrets
+
+---
+# --- DB REPLICA ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-replica
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: db-replica
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-replica
+  template:
+    metadata:
+      labels:
+        app: db-replica
+    spec:
+      containers:
+      - name: postgres
+        image: bitnami/postgresql:latest
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: POSTGRESQL_REPLICATION_MODE
+          value: "slave"
+        - name: POSTGRESQL_REPLICATION_USER
+          value: "repl_user"
+        - name: POSTGRESQL_REPLICATION_PASSWORD
+          value: "repl_password"
+        - name: POSTGRESQL_MASTER_HOST
+          value: "db-primary"
+        - name: POSTGRESQL_PASSWORD_FILE
+          value: "/run/secrets/db_password"
+        - name: ALLOW_EMPTY_PASSWORD
+          value: "yes"
+        volumeMounts:
+        - name: db-data
+          mountPath: /bitnami/postgresql
+        - name: trigger-vol
+          mountPath: /tmp
+        - name: secrets-vol
+          mountPath: "/run/secrets/db_password"
+          subPath: db_password.txt  
+      volumes:
+      - name: db-data
+        hostPath:
+          path: /shared-data/replica
+          type: DirectoryOrCreate
+      - name: trigger-vol
+        emptyDir: {}
+      - name: secrets-vol
+        secret:
+          secretName: medical-secrets
+
+---
+# --- AUTH SERVICE ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+spec:
+  ports:
+  - port: 5001
+  selector:
+    app: auth-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+      - name: auth-service
+        image: sasa2002/medical-auth:v4
+        ports:
+        - containerPort: 5001
+        env:
+        - name: DB_HOST_PRIMARY
+          value: "db-primary"
+        - name: DB_HOST_REPLICA
+          value: "db-replica"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_NAME
+          value: "medical_db"
+        volumeMounts:
+        - name: trigger-vol
+          mountPath: /tmp
+        - name: secrets-vol
+          mountPath: "/run/secrets/db_password"
+          subPath: db_password.txt
+        - name: secrets-vol-key
+          mountPath: "/run/secrets/db_key"
+          subPath: db_key.txt
+        - name: secrets-vol-auth
+          mountPath: "/run/secrets/secret_key_auth"
+          subPath: secret_key_auth.txt
+      volumes:
+      - name: trigger-vol
+        emptyDir: {}
+      - name: secrets-vol
+        secret:
+          secretName: medical-secrets
+      - name: secrets-vol-key
+        secret:
+          secretName: medical-secrets
+      - name: secrets-vol-auth
+        secret:
+          secretName: medical-secrets
+
+---
+# --- ML SERVICE ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-service
+spec:
+  ports:
+  - port: 5000
+  selector:
+    app: ml-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ml-service
+  template:
+    metadata:
+      labels:
+        app: ml-service
+    spec:
+      containers:
+      - name: ml-service
+        image: sasa2002/medical-ml:v4
+        env:               
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: medical-secrets       
+              key: ml_secret_key.txt
+
+---
+# --- REPORT SERVICE ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: report-service
+spec:
+  ports:
+  - port: 5002
+  selector:
+    app: report-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: report-service
+  template:
+    metadata:
+      labels:
+        app: report-service
+    spec:
+      containers:
+      - name: report-service
+        image: sasa2002/medical-report:v3
+        env:
+        - name: DB_HOST_PRIMARY
+          value: "db-primary"
+        - name: DB_HOST_REPLICA
+          value: "db-replica"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_NAME
+          value: "medical_db"
+        volumeMounts:
+        - name: secrets-vol
+          mountPath: "/run/secrets/db_password"
+          subPath: db_password.txt
+        - name: secrets-vol
+          mountPath: "/run/secrets/db_key"
+          subPath: db_key.txt
+      volumes:
+      - name: secrets-vol
+        secret:
+          secretName: medical-secrets
+
+---
+# --- PGADMIN ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgadmin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgadmin
+  template:
+    metadata:
+      labels:
+        app: pgadmin
+    spec:
+      containers:
+      - name: pgadmin
+        image: dpage/pgadmin4:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: PGADMIN_DEFAULT_EMAIL
+          value: "admin@admin.com"
+        - name: PGADMIN_DEFAULT_PASSWORD_FILE
+          value: "/run/secrets/pgadmin_pass"
+        volumeMounts:
+        - name: secrets-vol
+          mountPath: "/run/secrets/pgadmin_pass"
+          subPath: pgadmin_pass.txt
+      volumes:
+      - name: secrets-vol
+        secret:
+          secretName: medical-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgadmin-service
+spec:
+  selector:
+    app: pgadmin
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80

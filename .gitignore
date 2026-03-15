@@ -1,0 +1,26 @@
+# --- SICUREZZA (File che NON devono mai andare online) ---
+secrets/
+.env
+*.key
+*.pem
+*.p12
+*.crt
+
+# --- PYTHON (File generati dal sistema) ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.pytest_cache/
+
+# --- IDE e OS (File di configurazione del PC) ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- DOCKER ---
+# Ignora gli eventuali log di Docker salvati in locale
+*.log

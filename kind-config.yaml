@@ -1,0 +1,31 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+# --- 1. CONTROL PLANE ---
+- role: control-plane
+  extraPortMappings:
+  # HTTP: PC porta 80 -> Cluster porta 30080 (dove ascolta Nginx)
+  - containerPort: 30080
+    hostPort: 80
+    protocol: TCP
+  # HTTPS: PC porta 443 -> Cluster porta 30443 (dove ascolta Nginx)
+  - containerPort: 30443
+    hostPort: 443
+    protocol: TCP
+  # FRONTEND: PC porta 8501 -> Cluster porta 30501
+  - containerPort: 30501
+    hostPort: 8501
+    protocol: TCP
+  extraMounts:
+  - hostPath: ./postgres_data
+    containerPath: /shared-data
+
+# --- 2. WORKERS ---
+- role: worker
+  extraMounts:
+  - hostPath: ./postgres_data
+    containerPath: /shared-data
+- role: worker
+  extraMounts:
+  - hostPath: ./postgres_data
+    containerPath: /shared-data

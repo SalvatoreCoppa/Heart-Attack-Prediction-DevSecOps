@@ -1,0 +1,149 @@
+services:
+# --- NGINX (REVERSE PROXY) ---
+  nginx:
+    image: nginx:latest
+    container_name: nginx_proxy
+    ports:
+      - "80:80"   
+      - "443:443" 
+    secrets:
+      - nginx_key
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - frontend
+      - auth-service
+      - report-service
+    networks:
+      - heart-net
+      
+  # --- DATABASES ---
+  db-primary:
+    image: bitnami/postgresql:latest
+    user: root  
+    expose: ["5432"]
+    secrets: 
+      - db_password
+      - db_repl_password
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=master
+      - POSTGRESQL_REPLICATION_USER=repl_user
+      - POSTGRESQL_REPLICATION_PASSWORD=repl_password
+      - POSTGRESQL_USERNAME=postgres
+      - POSTGRESQL_PASSWORD_FILE=/run/secrets/db_password
+      - POSTGRESQL_DATABASE=medical_db 
+    volumes: ["primary_data:/bitnami/postgresql"]
+    networks: ["heart-net"]
+
+  db-replica:
+    image: bitnami/postgresql:latest
+    user: root   
+    secrets: 
+      - db_password
+      - db_repl_password
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=repl_user
+      - POSTGRESQL_REPLICATION_PASSWORD=repl_password
+      - POSTGRESQL_MASTER_HOST=db-primary
+      - POSTGRESQL_PASSWORD_FILE=/run/secrets/db_password
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+    depends_on: ["db-primary"]
+    volumes: 
+      - replica_data:/bitnami/postgresql
+      - trigger_share:/tmp
+    networks: ["heart-net"]
+
+
+  # --- AUTH SERVICE (Backend) ---
+  auth-service:
+    build: ./auth
+    container_name: auth-service
+    expose: ["5001"]
+    volumes:
+      - trigger_share:/tmp
+    secrets:  
+      - db_password
+      - db_key
+      - secret_key_auth
+    environment:
+      - DB_HOST_PRIMARY=db-primary
+      - DB_HOST_REPLICA=db-replica
+      - DB_USER=postgres
+      - DB_NAME=medical_db
+    networks: ["heart-net"]
+
+  # --- ML SERVICE ---
+  ml-service:
+    build: ./backend
+    expose: ["5000"]
+    container_name: ml-service
+    secrets:
+      - ml_secret_key
+    networks: ["heart-net"]
+
+  # --- REPORT SERVICE ---
+  report-service:
+    build: ./report_service
+    expose: ["5002"]
+    secrets: 
+      - db_password
+      - db_key       
+    environment:
+      - DB_HOST_PRIMARY=db-primary
+      - DB_HOST_REPLICA=db-replica
+      - DB_USER=postgres
+      - DB_NAME=medical_db
+    depends_on: ["db-primary", "db-replica"]
+    networks: ["heart-net"]
+
+  # --- FRONTEND ---
+  frontend:
+    build: ./frontend
+    container_name: frontend-ui
+    expose:
+      - "8501"
+    environment:
+      - AUTH_URL=http://auth-service:5001
+      - BACKEND_URL=http://ml-service:5000
+      - REPORT_URL=http://report-service:5002
+    networks:
+      - heart-net
+  
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin_container
+    ports: ["5050:80"]
+    secrets:
+      - pgadmin_pass
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_pass
+    depends_on: ["db-primary"]
+    networks: ["heart-net"]
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  db_key:
+    file: ./secrets/db_key.txt
+  secret_key_auth:
+    file: ./secrets/secret_key_auth.txt
+  ml_secret_key:
+    file: ./secrets/ml_secret_key.txt
+  db_repl_password:
+    file: ./secrets/db_repl_password.txt
+  pgadmin_pass:
+    file: ./secrets/pgadmin_pass.txt
+  nginx_key:
+    file: ./secrets/nginx.key
+
+networks:
+  heart-net:
+    driver: bridge
+
+volumes:
+  primary_data:
+  replica_data:
+  trigger_share:
